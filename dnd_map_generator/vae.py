@@ -10,16 +10,19 @@ from collections import OrderedDict
 
 
 class VariationalAutoencoder(torch.nn.Module):
-    def __init__(self):
+    def __init__(self, latent_dim=256):
         super(VariationalAutoencoder, self).__init__()
+        self.latent_dim = latent_dim
         self.encoder = torch.nn.Sequential(
             OrderedDict(
                 [
-                    ("conv1", torch.nn.Conv2d(3, 32, kernel_size=3, stride=(2, 2), padding=1, activation=torch.nn.ReLU())),
-                    ("conv2", torch.nn.Conv2d(32, 64, kernel_size=3, stride=(2, 2), padding=1, activation=torch.nn.ReLU())),
+                    ("conv1", torch.nn.Conv2d(3, 32, kernel_size=3, stride=(2, 2), padding=1)),
+                    ("act1", torch.nn.ReLU()),
+                    ("conv2", torch.nn.Conv2d(32, 64, kernel_size=3, stride=(2, 2), padding=1)),
+                    ("act2", torch.nn.ReLU()),
                     ("flatten", torch.nn.Flatten()),
-                    ("fc_mu", torch.nn.Linear(64 * 64 * 64, 256)),
-                    ("fc_logvar", torch.nn.Linear(64 * 64 * 64, 256))
+                    ("fc_latent", torch.nn.Linear(64 * 64 * 64, latent_dim + latent_dim)),
+#                    ("fc_logvar", torch.nn.Linear(64 * 64 * 64, 256))
                 ]
             )
         )
@@ -28,8 +31,10 @@ class VariationalAutoencoder(torch.nn.Module):
                 [
                     ("fc", torch.nn.Linear(256, 64 * 64 * 64)),
                     ("unflatten", torch.nn.Unflatten(1, (64, 64, 64))),
-                    ("deconv1", torch.nn.ConvTranspose2d(64, 32, kernel_size=3, stride=(2, 2), padding=1, output_padding=1, activation=torch.nn.ReLU())),
-                    ("deconv2", torch.nn.ConvTranspose2d(32, 3, kernel_size=3, stride=(2, 2), padding=1, output_padding=1, activation=torch.nn.Sigmoid()))
+                    ("deconv1", torch.nn.ConvTranspose2d(64, 32, kernel_size=3, stride=(2, 2), padding=1, output_padding=1)),
+                    ("act1", torch.nn.ReLU()),
+                    ("deconv2", torch.nn.ConvTranspose2d(32, 3, kernel_size=3, stride=(2, 2), padding=1, output_padding=1)),
+                    ("act2", torch.nn.Sigmoid()),
                 ]
             )
         )
