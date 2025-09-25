@@ -27,9 +27,9 @@ def standardize(img_tensor):
     standardized_img = (img_tensor - mean) / std
     return standardized_img, mean, std
 
-def rewhiten_image(img_tensor, mean, std):
+def unwhiten_image(img_tensor, mean, std):
     """
-    Rewhiten image tensor to original mean and std
+    unwhiten image tensor to original mean and std
     Args:
         img_tensor: torch.Tensor of shape (C, H, W) with mean 0 and std 1
         mean: torch.Tensor of shape (C,) original mean
@@ -37,8 +37,8 @@ def rewhiten_image(img_tensor, mean, std):
     Returns:
         rewhitened_img: torch.Tensor of shape (C, H, W) with original mean and std
     """
-    rewhitened_img = img_tensor * std[:, None, None] + mean[:, None, None]
-    return rewhitened_img
+    unwhitened_img = img_tensor * std[:, None, None] + mean[:, None, None]
+    return unwhitened_img
 
 
 class StandardizeTransform:
@@ -54,3 +54,18 @@ class StandardizeTransform:
         std = img_tensor.std([1, 2]) + 1e-7  # Add a small value to avoid division by zero
         standardized_img = (img_tensor - mean) / std
         return standardized_img
+
+
+class NormalizeTransform:
+    def __call__(self, img_tensor):
+        """
+        Normalize image tensor using given mean and std
+        Args:
+            img_tensor: torch.Tensor of shape (C, H, W) with pixel values in [0, 1]
+        Returns:
+            normalized_img: torch.Tensor of shape (C, H, W) normalized using given mean and std
+        """
+        img_tensor /= 255.0
+#        for t, m, s in zip(img_tensor, self.mean, self.std):
+#            t.sub_(m).div_(s)
+        return img_tensor

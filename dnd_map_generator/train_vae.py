@@ -12,11 +12,15 @@ from PIL import Image
 from torchvision import transforms
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.tensorboard import SummaryWriter
+import pytorch_warmup as warmup
 
 from .vae import VariationalAutoencoder, reconstruction_loss
-from .utils.transforms import standardize, rewhiten_image
+from .utils.transforms import standardize, unwhiten_image, NormalizeTransform
 #from .utils.transform import Standardize
 #from .utils.debug import print_sizes
+
+
+MEAN, STD = (102.69, 89.94, 65.28), (52.41, 46.54, 42.90)
 
 
 class VAEDataset(Dataset):
@@ -45,6 +49,7 @@ class VAEDataset(Dataset):
 
     def __getitem__(self, idx):
         image = Image.open(self.image_paths[idx]).convert('RGB')
+        print("image: ", image)
         image = self.transform(image)
         return image
 
@@ -53,9 +58,12 @@ def train(model,
           device,
           dataset, 
           optimizer,
+          lr_scheduler,
+          warmup_scheduler,
           logger,
           num_train_epochs,
-          batch_size):
+          batch_size,
+          reconstruction_loss_weight=0.5):
 
 
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=4)
@@ -65,21 +73,28 @@ def train(model,
         for i, batch in tqdm(enumerate(dataloader), desc=f"Epoch {epoch+1}/{num_train_epochs}", total=len(dataloader)):
 
             # Preprocess batch
-            batch, mean, std = standardize(batch)
             batch = batch.to(device)
 
             optimizer.zero_grad()
             
             # Forward pass
-#            print_sizes(model.encoder, batch) if (epoch == 0 and i == 0) else None
             out, mu, logvar = model(batch)
+            import pdb; pdb.set_trace()
 
-            loss_mse = reconstruction_loss(batch, out)
-            loss_kl = model.kl_divergence / (batch.size(0))
+            loss_mse = reconstruction_loss(batch, out) 
+            loss_kl = model.kl_divergence 
 
-            loss = loss_mse + loss_kl
+#            loss = (reconstruction_loss_weight) * loss_mse + (1. - reconstruction_loss_weight) * loss_kl
+            loss =  loss_mse +  (0.00025 * loss_kl)
             loss.backward()
+
+            # Perform gradient clipping by value
+            torch.nn.utils.clip_grad_value_(model.parameters(), 1.0)
+
+            # Update weights
             optimizer.step()
+            with warmup_scheduler.dampening():
+                lr_scheduler.step()
 
             # Track losses
             logger.add_scalar("Loss/MSE", loss_mse.item(), epoch * len(dataloader) + i)
@@ -103,13 +118,23 @@ def train(model,
                 logger.add_scalar("Latent/LogVar_Std", logvar.std().item(), epoch * len(dataloader) + i)
 
                 # Plot reconstructions
-                out = out.detach().cpu()
-                batch = batch.detach().cpu()
+                out = out[0].detach().cpu()[None, ...]
+                batch = batch[0].detach().cpu()[None, ...]
 
+                # Rewhiten images for better visualization
+                mean, std = torch.Tensor(MEAN), torch.Tensor(STD)
+#                out = unwhiten_image(out, mean, std)   
+#                batch = unwhiten_image(batch, mean, std)
 
                 grid = torch.cat((batch, out), dim=0)
                 grid = transforms.ToPILImage()(torchvision.utils.make_grid(grid, nrow=batch.size(0)))
                 logger.add_image("Reconstruction", transforms.ToTensor()(grid), epoch * len(dataloader) + i)
+
+                # Plot samples from prior
+                samples = model.sample(1).detach().cpu()
+                samples = unwhiten_image(samples, mean, std)
+                sample_grid = transforms.ToPILImage()(torchvision.utils.make_grid(samples, nrow=1))
+                logger.add_image("Samples", transforms.ToTensor()(sample_grid), epoch * len(dataloader) + i)
 
 
 def main(args):
@@ -118,7 +143,9 @@ def main(args):
     transform = transforms.Compose([
         transforms.Resize((256, 256)),
         transforms.ToTensor(),
+        NormalizeTransform(),
 #        Standardize(),
+#        transforms.Normalize(MEAN, STD),
     ])
     
     dataset = VAEDataset(args.data_dir, transform)
@@ -126,7 +153,9 @@ def main(args):
     # Initialize model and optimizer
     model = VariationalAutoencoder()
     model.to(args.device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate, betas=(0.9, 0.999), weight_decay=1e-6)
+    lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.num_train_epochs * len(dataset) // args.batch_size)
+    warmup_scheduler = warmup.UntunedExponentialWarmup(optimizer)
 
     # Initialize logger
     if not os.path.exists(args.log_dir):
@@ -135,7 +164,8 @@ def main(args):
     logger = SummaryWriter(log_dir=args.log_dir)
 
     # Train the model
-    train(model, args.device, dataset, optimizer, logger, args.num_train_epochs, args.batch_size)
+    train(model, args.device, dataset, optimizer, lr_scheduler, warmup_scheduler, 
+          logger, args.num_train_epochs, args.batch_size, args.reconstruction_loss_weight)
 
     print("Training complete. Saving model...")
     model_save_path = os.path.join(args.log_dir, "vae_model.pth")
@@ -151,6 +181,7 @@ if __name__ == "__main__":
     parser.add_argument("--latent_dim", type=int, default=256, help="Dimensionality of the latent space.")
     parser.add_argument("--num_train_epochs", type=int, default=10, help="Number of training epochs")
     parser.add_argument("--learning_rate", type=float, default=1e-3, help="Learning rate for optimizer.")
+    parser.add_argument("--reconstruction_loss_weight", type=float, default=0.5, help="Weight for reconstruction loss.")
     parser.add_argument("--batch_size", type=int, default=1, help="Batch size for training.")
     parser.add_argument("--log_dir", type=str, default="logs", help="Directory to save logs and model checkpoints.")
     args = parser.parse_args()
